@@ -1,4 +1,5 @@
 import datetime
+import random
 from sanic import Sanic
 from sanic.response import json,text
 from sanic.views import HTTPMethodView
@@ -15,6 +16,7 @@ def initDB(sanic, loop):
     global emp_data_collect
     emp_data_collect = employee_tracker_DB['empDataAndGPS']
 
+
 def serialize_employee(data):
     """delete _id and convert datetime to str"""
     del data['_id']
@@ -22,12 +24,14 @@ def serialize_employee(data):
         data['BirthDate'] = str(data['BirthDate'].date())
     return data
 
+
 def check_fields(data):
     required_fields = ['first_name', 'last_name', 'gender', 'BirthDate', 'position']
     for field in required_fields:
         if field not in data.keys():
             return False
     return True
+
 
 def str_to_datetime(string):
     return datetime.datetime.strptime(string, '%Y-%m-%d %H:%M:%S')
@@ -98,8 +102,20 @@ class TrackingData(HTTPMethodView):
 
 
 class GenNewGPS(HTTPMethodView):
-    async def get(self, request,full_name):
-        return text('NotImplementedYet')
+    async def put(self, request,full_name):
+        first_name, last_name = full_name.split('_')
+        start =[request.json['lat'], request.json['lon']]
+        travel_time = datetime.datetime.strptime(request.json['travel'], '%H:%M:%S')
+        travel_minute = travel_time.minute + travel_time.hour * 60
+        one_minute = datetime.timedelta(minutes=1)
+        new_date = str_to_datetime(request.json['time'])
+        delta = 0.001553  # 100 meters in coordinates
+        for i in range(travel_minute):
+            start[random.randint(0, 1)] += delta
+            new_date += one_minute
+            new_query = {'$push' : {'trackingData' : {'time':str(new_date) , 'lat':start[0], 'lon':start[1]}}}
+            await emp_data_collect.update_one({'first_name': first_name, 'last_name': last_name}, new_query)
+        return json({'received': True, 'message': 'generete and insert success'}, status=201)
 
 
 app.add_route(Employees.as_view(), '/tracking/api/employee')
