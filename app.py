@@ -76,8 +76,16 @@ class OneEmployee(HTTPMethodView):
 class TrackingData(HTTPMethodView):
     async def get(self,request,full_name):
         first_name, last_name = full_name.split('_')
-        data = await emp_data_collect.find_one({'first_name': first_name, 'last_name': last_name},{'trackingData':1})
-        return json(serialize_employee(data), status=200)
+        data = await emp_data_collect.find({'first_name': first_name, 'last_name': last_name},{'trackingData':1}).to_list(20)
+        tracking_data = data[0]['trackingData']
+
+        start_point = str_to_datetime(request.raw_args['start'])
+        end_point = str_to_datetime(request.raw_args['end'])
+        final_list=[]
+        for struct in tracking_data:
+            if (struct['time'] > start_point and struct['time'] < end_point):
+                final_list.append(struct)
+        return text(final_list, status=200)
 
     async def put(self,request,full_name):
         first_name, last_name = full_name.split('_')
@@ -90,8 +98,8 @@ class TrackingData(HTTPMethodView):
 
 
 class GenNewGPS(HTTPMethodView):
-    async def get(self, request, full_name):
-        pass
+    async def get(self, request,full_name):
+        return text('NotImplementedYet')
 
 
 app.add_route(Employees.as_view(), '/tracking/api/employee')
@@ -101,4 +109,4 @@ app.add_route(GenNewGPS.as_view(), '/tracking/api/employee/<full_name>/trackingD
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8000,debug=True)
+    app.run(host='0.0.0.0', port=8000)
