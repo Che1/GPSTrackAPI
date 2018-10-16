@@ -1,3 +1,4 @@
+import datetime
 from sanic import Sanic
 from sanic.response import json,text
 from sanic.views import HTTPMethodView
@@ -7,6 +8,13 @@ import motor.motor_asyncio
 
 app = Sanic(__name__)
 
+@app.listener('before_server_start')
+def initDB(sanic, loop):
+    client = motor.motor_asyncio.AsyncIOMotorClient(io_loop=asyncio.get_event_loop())
+    employee_tracker_DB = client['employeeTracker']
+    global emp_data_collect
+    emp_data_collect = employee_tracker_DB['empDataAndGPS']
+
 def serialize_employee(data):
     """delete _id and convert datetime to str"""
     del data['_id']
@@ -14,15 +22,15 @@ def serialize_employee(data):
         data['BirthDate'] = str(data['BirthDate'].date())
     return data
 
+def check_fields(data):
+    required_fields = ['first_name', 'last_name', 'gender', 'BirthDate', 'position']
+    for field in required_fields:
+        if field not in data.keys():
+            return False
+    return True
 
-@app.listener('before_server_start')
-def init(sanic, loop):
-    client = motor.motor_asyncio.AsyncIOMotorClient(io_loop=asyncio.get_event_loop())
-    employee_tracker_DB = client['employeeTracker']
-    global emp_data_collect
-    emp_data_collect = employee_tracker_DB['empDataAndGPS']
-
-
+def str_to_datetime(string):
+    return datetime.datetime.strptime(string, '%Y-%m-%d %H:%M:%S')
 
 
 class Employees(HTTPMethodView):
@@ -30,43 +38,66 @@ class Employees(HTTPMethodView):
         data = await emp_data_collect.find({}).to_list(20)
         for x in data:
             serialize_employee(x)
-        return json(data)
+        return json(data, status=200)
+
     async def post(self, request):
-        pass
+        passed_json = request.json
+        if check_fields(passed_json):
+            passed_json.setdefault('middle_name','')
+            passed_json.setdefault('trackingData',[])
+            passed_json['BirthDate'] = str_to_datetime(passed_json['BirthDate']+' 12:00:00')
+            emp_data_collect.insert_one(passed_json)
+            return json({'received': True, 'message': 'employee created'}, status=201)
+
+        return text({'received': False, 'message': 'employee not created - invalid keys'}, status=400)
 
 
 class OneEmployee(HTTPMethodView):
     async def get(self,request,full_name):
         first_name, last_name = full_name.split('_')
         data = await emp_data_collect.find_one({'first_name':first_name,'last_name':last_name})
-        return json(serialize_employee(data))
-    async def put(self,request,full_name):
-        pass
-    async def delete(self,request,full_name):
-        pass
+        return json(serialize_employee(data), status=200)
 
+    async def put(self,request,full_name):
+        first_name, last_name = full_name.split('_')
+        passed_json = request.json
+        await emp_data_collect.update_one({'first_name': first_name, 'last_name': last_name}, passed_json)
+        return json({'received': True, 'message': request.json}, status=201)
+
+    async def delete(self,request,full_name):
+        first_name, last_name = full_name.split('_')
+        result = await emp_data_collect.delete_one({'first_name':first_name,'last_name':last_name})
+        if result.deleted_count == 1:
+            return json({'deleted': True, 'message': request.json}, status=204)
+        else:
+            return text({'deleted': False, 'message': request.json}, status=404)
 
 
 class TrackingData(HTTPMethodView):
     async def get(self,request,full_name):
         first_name, last_name = full_name.split('_')
-        data = await emp_data_collect.find_one({'first_name': first_name, 'last_name': last_name},{"trackingData":1})
-        return json(serialize_employee(data))
+        data = await emp_data_collect.find_one({'first_name': first_name, 'last_name': last_name},{'trackingData':1})
+        return json(serialize_employee(data), status=200)
 
     async def put(self,request,full_name):
         first_name, last_name = full_name.split('_')
-        passed_json = request.json
-        new_query = {'$push': {"trackingData": passed_json}}
-        await emp_data_collect.update_one({'first_name': first_name, 'last_name': last_name}, new_query)
-        return json({"received": True, "message": request.json})
+        passed_list = request.json
+        for json_obj in passed_list:
+            json_obj['time'] = str_to_datetime(json_obj['time'])
+            new_query = {'$push': {'trackingData': json_obj}}
+            await emp_data_collect.update_one({'first_name': first_name, 'last_name': last_name}, new_query)
+        return json({'received': True, 'message': 'insert success'},status=201)
+
+
+class GenNewGPS(HTTPMethodView):
+    async def get(self, request, full_name):
+        pass
 
 
 app.add_route(Employees.as_view(), '/tracking/api/employee')
 app.add_route(OneEmployee.as_view(), '/tracking/api/employee/<full_name>')
 app.add_route(TrackingData.as_view(), '/tracking/api/employee/<full_name>/trackingData')
-# TODO add route to generate new coordinate at /tracking/api/employee/<full_name>/trackingData/generateNew
-
-
+app.add_route(GenNewGPS.as_view(), '/tracking/api/employee/<full_name>/trackingData/generateNew')
 
 
 if __name__ == '__main__':
